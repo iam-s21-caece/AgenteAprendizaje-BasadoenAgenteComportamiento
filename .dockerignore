@@ -1,0 +1,20 @@
+# Lo que NO viaja a la imagen: el dominio de referencia (molde de ejemplo), los experimentos,
+# los datos sintéticos y el estado local. La imagen lleva el núcleo, el dominio agent_behavior
+# y el entry point — nada más.
+.git
+.gitignore
+.vscode
+.env
+state/
+data/
+experiments/
+domains/reference/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+README.md

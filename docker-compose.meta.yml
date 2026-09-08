@@ -1,0 +1,91 @@
+# Compose PROPIO del meta-agente. No toca el compose del agente de seguridad ni el de Keycloak.
+#
+# Levantar (el .env es OPCIONAL: sin el, valen los defaults de abajo):
+#   docker compose -f docker-compose.meta.yml up -d --build
+#   docker logs -f meta-agente-aprendizaje
+#
+# Para configurar algo (API key del LLM, rutas, umbrales):
+#   cp .env.example .env      # y editar
+#
+# La integracion con el agente observado es UN MONTAJE DE SOLO LECTURA. No hay API entre los
+# dos procesos, no se abre ningun puerto y el agente observado no requiere ninguna modificacion:
+# ya escribe sus trazas en disco, y este proceso las sigue con tail incremental.
+services:
+  meta-agente:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agente-aprendizaje-meta:0.1.0
+    container_name: meta-agente-aprendizaje
+    restart: unless-stopped
+
+    # No se usa `env_file:` a proposito. Con `env_file: - .env`, un clon recien bajado del repo
+    # (donde .env esta gitignoreado por contener secretos) hace FALLAR a compose antes de
+    # arrancar nada. Con interpolacion, compose lee ./.env solo si existe -- es comportamiento
+    # nativo y de todas las versiones -- y si no existe caen los defaults de abajo. Resultado:
+    # clonar y levantar funciona, y configurar sigue siendo copiar .env.example a .env.
+    environment:
+      # Rutas dentro del contenedor: fijas. Lo que cambia entre maquinas es el lado izquierdo
+      # de los volumenes (ver OBSERVED_DATA_DIR).
+      OBSERVED_TRACES_DIR: /observed/traces
+      STATE_DIR: /state
+
+      # Identidad de los agentes en juego.
+      OBSERVED_AGENT_ID: ${OBSERVED_AGENT_ID:-keycloak-agent}
+      META_AGENT_ID: ${META_AGENT_ID:-meta-agent}
+
+      # LLM: opcional. Sin API key el agente sigue aprendiendo con exploracion determinista.
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+
+      # Modelo de normalidad.
+      WARMUP: ${WARMUP:-20}
+      CLEAN_GUARD_SIGMAS: ${CLEAN_GUARD_SIGMAS:-4.0}
+      THRESHOLD_STEP: ${THRESHOLD_STEP:-0.15}
+      MIN_THRESHOLD: ${MIN_THRESHOLD:-1.5}
+      MAX_THRESHOLD: ${MAX_THRESHOLD:-6.0}
+
+      # Loop y operacion.
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2.0}
+      DEDUP_COOLDOWN_CYCLES: ${DEDUP_COOLDOWN_CYCLES:-50}
+      SAVE_EVERY: ${SAVE_EVERY:-200}
+      EXPLORE_EVERY: ${EXPLORE_EVERY:-200}
+      ABANDON_AFTER_SECONDS: ${ABANDON_AFTER_SECONDS:-1800}
+      AUDIT_MAX_RECORDS: ${AUDIT_MAX_RECORDS:-5000}
+      HEARTBEAT_CYCLES: ${HEARTBEAT_CYCLES:-500}
+      IDLE_FLUSH_SECONDS: ${IDLE_FLUSH_SECONDS:-60}
+
+      # Exposicion del estado propio por HTTP (solo lectura), para el dashboard.
+      # Apagarlo con STATE_SERVER_ENABLED=false devuelve al agente a su forma anterior:
+      # sin puerto, sin superficie de red, observable solo por `--status` y `docker logs`.
+      STATE_SERVER_ENABLED: ${STATE_SERVER_ENABLED:-true}
+      STATE_SERVER_HOST: 0.0.0.0
+      STATE_SERVER_PORT: 8090
+
+    volumes:
+      # Territorio del agente OBSERVADO: SOLO LECTURA, sin excepcion. Es la garantia tecnica de
+      # que agregar esta capa de supervision no puede alterar lo que hace el agente vigilado.
+      # OBSERVED_DATA_DIR apunta al ./data del agente de seguridad; el default asume que ambos
+      # agentes son carpetas hermanas (en la VPS: /root/keycloak/agente y .../agenteAprendizajeGn).
+      - ${OBSERVED_DATA_DIR:-../agente/data}:/observed:ro
+      # Territorio propio: conocimiento aprendido, meta-alertas y posicion de lectura.
+      # Este es el unico lugar donde el meta-agente escribe.
+      - ./state:/state
+
+    # Sigue SIN `network_mode: host`: a diferencia del agente observado, este no mide el host,
+    # asi que no necesita su stack de red. Lo unico que se publica es el puerto de lectura del
+    # estado propio, que es lo que consume el dashboard.
+    #
+    # La promesa de no perturbar lo observado no se toca: este puerto sirve /state (volumen
+    # propio) y todos sus handlers son GET. Para restringirlo a la loopback de la VPS y llegar
+    # por un tunel SSH: STATE_SERVER_PUBLISH=127.0.0.1:8090
+    ports:
+      - "${STATE_SERVER_PUBLISH:-8090}:8090"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

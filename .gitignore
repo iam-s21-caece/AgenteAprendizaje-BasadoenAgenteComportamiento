@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Configuración local con credenciales (se versiona .env.example, nunca .env).
+.env
+
+# Estado del meta-agente en la máquina donde corre: conocimiento aprendido, meta-alertas y
+# posición de lectura. Es estado de ejecución, no código.
+state/
